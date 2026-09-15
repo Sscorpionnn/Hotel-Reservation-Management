@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    // A committed/copied .tsbuildinfo with no matching dist/ next to it
+    // makes tsc think a prior build is still up to date and silently
+    // skip emitting anything (bit us once in the Docker build — the
+    // container never has a prior dist/, so incremental mode is never
+    // actually useful here).
+    "incremental": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "test", "prisma", "**/*spec.ts", "**/*e2e-spec.ts"]
+}

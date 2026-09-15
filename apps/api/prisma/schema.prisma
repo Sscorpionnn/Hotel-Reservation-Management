@@ -1,0 +1,519 @@
+generator client {
+  provider      = "prisma-client-js"
+  // "native" covers local dev (glibc); the musl target is what the
+  // node:20-alpine runtime image actually needs — Alpine 3.20+ ships
+  // OpenSSL 3.x, hence the explicit -openssl-3.0.x suffix rather than
+  // plain "linux-musl", which targets OpenSSL 1.1 and fails to load.
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & tenancy
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  SUPER_ADMIN
+  ORG_ADMIN
+  HOTEL_MANAGER
+  FRONT_DESK_AGENT
+  HOUSEKEEPING_STAFF
+  GUEST_PORTAL
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  INVITED
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users        User[]
+  hotels       Hotel[]
+  guests       Guest[]
+  promotions   Promotion[]
+  auditLogs    AuditLog[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  email        String     @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         UserRole
+  status       UserStatus @default(ACTIVE)
+  hotelId      String?
+  hotel        Hotel?     @relation(fields: [hotelId], references: [id])
+
+  mfaEnabled     Boolean  @default(false)
+  mfaSecretHash  String?
+  tokenVersion   Int      @default(0)
+  lastLoginAt    DateTime?
+  failedLoginCount Int    @default(0)
+  lockedUntil    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+  housekeepingTasks HousekeepingTask[] @relation("AssignedStaff")
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  family    String
+  revoked   Boolean  @default(false)
+  replacedBy String?
+  userAgent String?
+  ipAddress String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([family])
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Hotel inventory
+// ---------------------------------------------------------------------------
+
+model Hotel {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name        String
+  slug        String
+  timezone    String   @default("UTC")
+  currency    String   @default("USD")
+  addressLine String
+  city        String
+  country     String
+  isActive    Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roomTypes     RoomType[]
+  rooms         Room[]
+  amenities     Amenity[]
+  reservations  Reservation[]
+  users         User[]
+  promotions    Promotion[]
+  housekeepingTasks HousekeepingTask[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@map("hotels")
+}
+
+model RoomType {
+  id      String @id @default(uuid())
+  hotelId String
+  hotel   Hotel  @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  capacityAdults   Int @default(2)
+  capacityChildren Int @default(0)
+  basePriceCents   Int
+  currency         String @default("USD")
+  isActive         Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rooms       Room[]
+  amenities   RoomTypeAmenity[]
+  ratePlans   RatePlan[]
+
+  @@index([hotelId])
+  @@map("room_types")
+}
+
+enum RoomStatus {
+  AVAILABLE
+  OUT_OF_SERVICE
+  MAINTENANCE
+}
+
+model Room {
+  id         String     @id @default(uuid())
+  hotelId    String
+  hotel      Hotel      @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  roomTypeId String
+  roomType   RoomType   @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+
+  roomNumber String
+  floor      Int?
+  status     RoomStatus @default(AVAILABLE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  nights             ReservationNight[]
+  housekeepingTasks  HousekeepingTask[]
+
+  @@unique([hotelId, roomNumber])
+  @@index([roomTypeId])
+  @@map("rooms")
+}
+
+model Amenity {
+  id      String @id @default(uuid())
+  hotelId String
+  hotel   Hotel  @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  name String
+  icon String?
+
+  roomTypes RoomTypeAmenity[]
+
+  @@unique([hotelId, name])
+  @@map("amenities")
+}
+
+model RoomTypeAmenity {
+  roomTypeId String
+  roomType   RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+  amenityId  String
+  amenity    Amenity  @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+
+  @@id([roomTypeId, amenityId])
+  @@map("room_type_amenities")
+}
+
+// ---------------------------------------------------------------------------
+// Rates
+// ---------------------------------------------------------------------------
+
+model RatePlan {
+  id         String   @id @default(uuid())
+  roomTypeId String
+  roomType   RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+
+  name           String
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+  priceCents     Int
+  currency       String   @default("USD")
+  minStayNights  Int      @default(1)
+  isRefundable   Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([roomTypeId, startDate, endDate])
+  @@map("rate_plans")
+}
+
+// ---------------------------------------------------------------------------
+// Guests
+// ---------------------------------------------------------------------------
+
+model Guest {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  email     String
+  firstName String
+  lastName  String
+  phone     String?
+  country   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations Reservation[]
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@map("guests")
+}
+
+// ---------------------------------------------------------------------------
+// Reservation engine
+// ---------------------------------------------------------------------------
+
+enum ReservationStatus {
+  HELD
+  CONFIRMED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+  EXPIRED
+}
+
+model Reservation {
+  id      String @id @default(uuid())
+  hotelId String
+  hotel   Hotel  @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  guestId String
+  guest   Guest  @relation(fields: [guestId], references: [id])
+
+  status ReservationStatus @default(HELD)
+
+  checkInDate  DateTime @db.Date
+  checkOutDate DateTime @db.Date
+  adults       Int      @default(1)
+  children     Int      @default(0)
+
+  currency        String @default("USD")
+  subtotalCents   Int
+  discountCents    Int @default(0)
+  totalCents      Int
+
+  promotionId String?
+  promotion   Promotion? @relation(fields: [promotionId], references: [id])
+
+  idempotencyKey String @unique
+  holdExpiresAt  DateTime?
+  cancelledAt    DateTime?
+  cancellationReason String?
+  checkedInAt    DateTime?
+  checkedOutAt   DateTime?
+
+  createdByUserId String?
+
+  // Optimistic-concurrency guard for state transitions.
+  version Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  nights   ReservationNight[]
+  payments PaymentIntent[]
+
+  @@index([hotelId, status])
+  @@index([guestId])
+  @@index([holdExpiresAt])
+  @@map("reservations")
+}
+
+// One row per booked room per calendar night. A partial unique index
+// (roomId, stayDate) WHERE released_at IS NULL is created via raw SQL
+// migration and is the hard constraint that makes double-booking
+// impossible even under concurrent transactions.
+model ReservationNight {
+  id            String      @id @default(uuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  roomId        String
+  room          Room        @relation(fields: [roomId], references: [id])
+
+  stayDate   DateTime @db.Date
+  rateCents  Int
+
+  releasedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([roomId, stayDate])
+  @@index([reservationId])
+  @@map("reservation_nights")
+}
+
+// ---------------------------------------------------------------------------
+// Payments (metadata only — no card data / CVV is ever stored)
+// ---------------------------------------------------------------------------
+
+enum PaymentStatus {
+  REQUIRES_ACTION
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+model PaymentIntent {
+  id            String        @id @default(uuid())
+  reservationId String
+  reservation   Reservation   @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+
+  provider        String
+  providerRef     String?
+  status          PaymentStatus @default(PENDING)
+  amountCents     Int
+  currency        String
+  idempotencyKey  String        @unique
+
+  // Last 4 digits + brand only — never the PAN or CVV.
+  cardBrand    String?
+  cardLast4    String?
+
+  failureReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([reservationId])
+  @@map("payment_intents")
+}
+
+// Every inbound webhook is recorded by its provider-issued event id so a
+// replayed delivery is a no-op (idempotent processing + replay protection).
+model PaymentWebhookEvent {
+  id            String   @id @default(uuid())
+  provider      String
+  providerEventId String
+  signatureValid Boolean
+  payloadHash   String
+  receivedAt    DateTime @default(now())
+  processedAt   DateTime?
+
+  @@unique([provider, providerEventId])
+  @@map("payment_webhook_events")
+}
+
+// ---------------------------------------------------------------------------
+// Promotions
+// ---------------------------------------------------------------------------
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+model Promotion {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  hotelId        String?
+  hotel          Hotel?       @relation(fields: [hotelId], references: [id])
+
+  code          String
+  discountType  DiscountType
+  discountValue Int
+  startsAt      DateTime
+  endsAt        DateTime
+  maxRedemptions Int?
+  redemptionCount Int @default(0)
+  isActive      Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations Reservation[]
+
+  @@unique([organizationId, code])
+  @@map("promotions")
+}
+
+// ---------------------------------------------------------------------------
+// Housekeeping
+// ---------------------------------------------------------------------------
+
+enum HousekeepingStatus {
+  DIRTY
+  IN_PROGRESS
+  CLEAN
+  INSPECTED
+  OUT_OF_SERVICE
+}
+
+model HousekeepingTask {
+  id      String @id @default(uuid())
+  hotelId String
+  hotel   Hotel  @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  roomId  String
+  room    Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  status       HousekeepingStatus @default(DIRTY)
+  assignedToId String?
+  assignedTo   User? @relation("AssignedStaff", fields: [assignedToId], references: [id])
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([hotelId, status])
+  @@index([roomId])
+  @@map("housekeeping_tasks")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WEBSOCKET
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+model Notification {
+  id      String @id @default(uuid())
+  organizationId String
+
+  recipientType String // GUEST | USER
+  recipientId   String
+  channel       NotificationChannel
+  template      String
+  payload       Json
+  status        NotificationStatus @default(QUEUED)
+  error         String?
+
+  createdAt DateTime @default(now())
+  sentAt    DateTime?
+
+  @@index([organizationId, recipientId])
+  @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actorUserId    String?
+  actor          User?        @relation(fields: [actorUserId], references: [id])
+
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

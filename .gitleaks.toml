@@ -1,0 +1,19 @@
+title = "HRMS gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-safe placeholders: local dev/test fixtures, never real credentials"
+regexes = [
+  '''test-(access|refresh|cookie|webhook)-secret-[a-zA-Z0-9-]*''',
+  '''docker-smoke-[a-zA-Z0-9-]*''',
+  '''\$argon2id\$v=19\$m=19456,t=2,p=1\$c29tZXNhbHRzb21lc2FsdA\$.*''', # DUMMY_HASH in auth.service.ts — never verifies against a real password
+  '''Demo-Password-123!''',
+  '''Fixture-Pass-123!''',
+]
+paths = [
+  '''\.env\.example$''',
+  '''apps/api/test/.*''',
+  '''apps/api/prisma/seed\.ts$''',
+]
