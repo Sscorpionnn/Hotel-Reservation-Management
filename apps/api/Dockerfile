@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:20-alpine AS base
+FROM node:26-alpine AS base
 # Alpine's musl libc ships OpenSSL 3.x, but without the `openssl` package
 # itself Prisma's runtime can't detect that version and silently assumes
 # 1.1 — pulling in a query engine binary that fails to `dlopen` (missing
@@ -16,7 +16,7 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @hrms/api prisma:generate
 RUN pnpm --filter @hrms/api build
 
-FROM node:20-alpine AS runtime
+FROM node:26-alpine AS runtime
 RUN apk add --no-cache openssl
 ENV NODE_ENV=production
 RUN addgroup -S hrms && adduser -S hrms -G hrms
