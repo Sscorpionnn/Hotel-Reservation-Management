@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:20-alpine AS base
+FROM node:26-alpine AS base
 RUN corepack enable
 WORKDIR /workspace
 
@@ -10,7 +10,7 @@ COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @hrms/web build
 
-FROM node:20-alpine AS runtime
+FROM node:26-alpine AS runtime
 ENV NODE_ENV=production
 RUN addgroup -S hrms && adduser -S hrms -G hrms
 WORKDIR /app
