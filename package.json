@@ -19,7 +19,7 @@
     "audit": "pnpm audit --audit-level=high"
   },
   "devDependencies": {
-    "prettier": "^3.3.3"
+    "prettier": "^3.9.8"
   },
   "pnpm": {
     "overrides": {
